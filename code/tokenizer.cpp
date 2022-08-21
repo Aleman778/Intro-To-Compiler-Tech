@@ -9,6 +9,10 @@ enum Token_Kind {
     Token_Whitespace,
     Token_Semi,
     Token_Assign,
+    Token_Add,
+    Token_Sub,
+    Token_Mul,
+    Token_Div,
     Token_Number,
     Token_Ident,
     Token_EOF,
@@ -77,6 +81,18 @@ advance_token(Tokenizer* tokenizer) {
     } else if (c == '=') {
         tokenizer->curr++;
         result.kind = Token_Assign;
+    } else if (c == '+') {
+        tokenizer->curr++;
+        result.kind = Token_Add;
+    } else if (c == '-') {
+        tokenizer->curr++;
+        result.kind = Token_Sub;
+    } else if (c == '*') {
+        tokenizer->curr++;
+        result.kind = Token_Mul;
+    } else if (c == '/') {
+        tokenizer->curr++;
+        result.kind = Token_Div;
     } else if (c == ';') {
         tokenizer->curr++;
         result.kind = Token_Semi;

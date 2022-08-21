@@ -44,7 +44,7 @@ typedef u32 string_id;
 struct String_Interner {
     string_map(string_id)* str_to_id = 0; // stb_ds hashmap maps strings to ids
     string* id_to_str = 0; // stb_ds array of strings where the index is the string id
-    u32 id_counter = 0;
+    u32 id_counter = 1;
 };
 
 global String_Interner global_interner;
@@ -94,6 +94,10 @@ struct Value {
 
 enum Binary_Op {
     Binop_Assign,
+    Binop_Add,
+    Binop_Sub,
+    Binop_Mul,
+    Binop_Div,
 };
 
 enum Ast_Kind {
@@ -101,6 +105,7 @@ enum Ast_Kind {
     Ast_Value,
     Ast_Ident,
     Ast_Binary,
+    Ast_Block,
 };
 
 struct Ast {
@@ -113,6 +118,9 @@ struct Ast {
             Binary_Op op;
             Ast* rhs;
         } Binary;
+        struct {
+            array(Ast*)* exprs;
+        } Block;
     };
 };
 
@@ -206,12 +214,44 @@ parse_expression(Parser* parser) {
     
     Token token = peek_token(parser);
     switch (token.kind) {
-        case Token_Assign: {
-            next_token(parser);
-            Ast* rhs = parse_expression(parser);
-            return create_binary_expr(parser, lhs, Binop_Assign, rhs);
-        } break;
+#define BINARY_CASE(binop) \
+case Token_##binop: { \
+next_token(parser); \
+Ast* rhs = parse_expression(parser); \
+return create_binary_expr(parser, lhs, Binop_##binop, rhs); \
+} break
+        
+        BINARY_CASE(Assign);
+        BINARY_CASE(Add);
+        BINARY_CASE(Sub);
+        BINARY_CASE(Mul);
+        BINARY_CASE(Div);
+#undef BINARY_CASE
     }
     
     return lhs;
+}
+
+
+Ast*
+parse_block(Parser* parser) {
+    Ast* result = arena_push_struct(&parser->ast_arena, Ast);
+    result->kind = Ast_Block;
+    
+    for (;;) {
+        Token peek = peek_token(parser);
+        if (peek.kind == Token_EOF) {
+            break;
+        }
+        
+        Ast* expr = parse_expression(parser);
+        array_push(result->Block.exprs, expr);
+        
+        Token token = next_token(parser);
+        if (token.kind != Token_Semi) {
+            pln("error: parser expected semi colon");
+        }
+    }
+    
+    return result;
 }
