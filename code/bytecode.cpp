@@ -1,12 +1,13 @@
 
 enum Bc_Opcode {
-    Bytecode_noop,
-    Bytecode_push,
-    Bytecode_load,
-    Bytecode_store,
-    Bytecode_add,
-    Bytecode_sub,
-    Bytecode_mul,
+    Bytecode_noop,  // does nothing
+    Bytecode_push,  // dest = (s32*) SP; SP -= src0
+    Bytecode_load,  // dest = *src0
+    Bytecode_store, // *dest = src0
+    Bytecode_add,   // dest = src0 + src1
+    Bytecode_sub,   // dest = src0 - src1
+    Bytecode_mul,   // dest = src0 * src1
+    Bytecode_div,   // dest = src0 / src1
     // ... 
 };
 
@@ -151,6 +152,27 @@ bc_build_expression(Bc_Builder* bc, Ast* node) {
             if (node->Binary.op == Binop_Assign) {
                 rhs = bc_load(bc, rhs);
                 bc_store(bc, lhs, rhs);
+            } else {
+                lhs = bc_load(bc, lhs);
+                rhs = bc_load(bc, rhs);
+                switch (node->Binary.op) {
+#define BINARY_INT_CASE(binop, opcode) \
+case Binop_##binop: { \
+result = bc_binary(bc, Bytecode_##opcode, lhs, rhs); \
+} break
+                    
+                    BINARY_INT_CASE(Add, add);
+                    BINARY_INT_CASE(Sub, sub);
+                    BINARY_INT_CASE(Mul, mul);
+                    BINARY_INT_CASE(Div, div);
+#undef BINARY_INT_CASE
+                }
+            }
+        } break;
+        
+        case Ast_Block: {
+            for_array_v(node->Block.exprs, expr, _) {
+                bc_build_expression(bc, expr);
             }
         } break;
     }
@@ -189,7 +211,8 @@ string_builder_push(String_Builder* sb, Bc_Instruction* insn) {
     }
     string_builder_push(sb, opcode_names[insn->opcode]);
     string_builder_push(sb, " ");
-    if (string_builder_push(sb, &insn->src0)) {
+    if (string_builder_push(sb, &insn->src0) &&
+        insn->src1.kind != BcOperand_None) {
         string_builder_push(sb, ", ");
     }
     string_builder_push(sb, &insn->src1);

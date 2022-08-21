@@ -6,6 +6,7 @@
 #include "parser.cpp"
 #include "interp.cpp"
 #include "bytecode.cpp"
+#include "x64.cpp"
 
 string
 read_entire_file(cstring filepath) {
@@ -84,7 +85,7 @@ int
 main(int argc, char** argv) {
     
     if (argc >= 2) {
-        string source = read_entire_file(argv[2]);
+        string source = read_entire_file(argv[1]);
         Ast* ast = parse_source(source);
         
         // Interpreter
@@ -99,7 +100,15 @@ main(int argc, char** argv) {
         Bc_Builder bc_builder = {};
         bc_build_expression(&bc_builder, ast);
         bc_print_program(&bc_builder);
+        
+        // X64 assembler
+        X64_Builder x64_builder = {};
+        convert_to_x64(&x64_builder, bc_builder.instructions);
+        x64_print_program(&x64_builder);
+        
     } else {
+        
+        // Run interpreter in a REPL
         Interp interp = {};
         Interp_Scope scope = {};
         array_push(interp.scopes, scope);
