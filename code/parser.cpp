@@ -249,7 +249,10 @@ parse_block(Parser* parser) {
         
         Token token = next_token(parser);
         if (token.kind != Token_Semi) {
-            pln("error: parser expected semi colon");
+            if (next_token(parser).kind != Token_EOF) {
+                pln("error: parser expected semicolon");
+            }
+            break;
         }
     }
     

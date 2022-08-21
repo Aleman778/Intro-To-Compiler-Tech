@@ -47,6 +47,7 @@ interp_expression(Interp* interp, Ast* ast) {
                 switch (ast->Binary.op) {
 #define BINARY_INT_CASE(binop, op_symbol) \
 case Binop_##binop: { \
+result.type = Value_integer; \
 result.integer = lhs_op.integer op_symbol rhs_op.integer; \
 } break
                     
