@@ -7,10 +7,11 @@ enum X64_Opcode {
     X64Opcode_sub,  // op0 -= op1
     X64Opcode_imul, // op0 *= op1
     X64Opcode_idiv, // op0 /= op1
+    X64Opcode_ret,  // returns RAX (on windows)
 };
 
 const cstring x64_opcode_name_table[] = {
-    "noop", "int3", "mov", "add", "sub", "mul", "div"
+    "noop", "int3", "mov", "add", "sub", "mul", "div", "ret"
 };
 
 enum X64_Operand_Kind {
@@ -23,6 +24,7 @@ enum X64_Operand_Kind {
 typedef int X64_Encoding;
 enum  {
     X64Encoding_r = bit(X64Operand_r32),
+    X64Encoding_m = bit(X64Operand_m32),
     X64Encoding_rr = bit(X64Operand_r32) | bit(X64Operand_r32 + 3),
     X64Encoding_rm = bit(X64Operand_r32) | bit(X64Operand_m32 + 3),
     X64Encoding_mr = bit(X64Operand_m32) | bit(X64Operand_r32 + 3),
@@ -31,7 +33,6 @@ enum  {
 };
 
 enum X64_Register {
-    X64Register_None,
     X64Register_rax,
     X64Register_rcx,
     X64Register_rdx,
@@ -43,7 +44,7 @@ enum X64_Register {
 };
 
 const cstring x64_register_name_table[] = {
-    "?", "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"
+    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"
 };
 
 struct X64_Operand {
@@ -72,7 +73,7 @@ struct X64_Builder {
 
 inline void
 x64_push_instruction(X64_Builder* x64, X64_Instruction insn) {
-    insn.encoding = bit(insn.op0.kind) | bit(insn.op1.kind);
+    insn.encoding = bit(insn.op0.kind) | bit(insn.op1.kind + 3);
     array_push(x64->instructions, insn);
 }
 
@@ -146,6 +147,23 @@ convert_to_x64_instruction(X64_Builder* x64, Bc_Instruction* bc) {
             x64_push_instruction(x64, X64Opcode_mov, bc->dest, bc->src0);
             x64_push_instruction(x64, X64Opcode_imul, bc->dest, bc->src1);
         } break;
+        
+        case Bytecode_ret: { // ret src0;
+            X64_Operand rax = {};
+            rax.kind = X64Operand_r32;
+            rax.reg_allocated = X64Register_rax;
+            rax.is_allocated = true;
+            
+            X64_Instruction mov_insn = {};
+            mov_insn.opcode = X64Opcode_mov;
+            mov_insn.op0 = rax;
+            mov_insn.op1 = x64_build_operand(x64, bc->src0);
+            x64_push_instruction(x64, mov_insn);
+            
+            X64_Instruction ret_insn = {};
+            ret_insn.opcode = X64Opcode_ret;
+            x64_push_instruction(x64, ret_insn);
+        } break;
     }
 }
 
@@ -158,18 +176,22 @@ convert_to_x64(X64_Builder* x64, array(Bc_Instruction)* instructions) {
 
 
 struct Machine_Code {
-    u8* data;
-    umm count;
+    u8* bytes;
+    umm size;
 };
 
-Machine_Code
-assemble_x64_instruction_to_machine_code(X64_Builder* x64, X64_Instruction* insn) {
-    Machine_Code result = {};
-    result.data = (u8*) malloc(1024);
-    u8* curr = result.data;
+void
+assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* insn) {
+    u8* curr = code->bytes + code->size;
     
+    if (insn->opcode == X64Opcode_ret) {
+        *curr++ = 0xC3; // near return
+        code->size++;
+        return;
+    }
     
     // opcode
+    u8 reg = 0;
     switch (insn->opcode) {
         case X64Opcode_mov: {
             switch (insn->encoding) {
@@ -177,7 +199,7 @@ assemble_x64_instruction_to_machine_code(X64_Builder* x64, X64_Instruction* insn
                 case X64Encoding_mr: *curr++ = 0x89; break;
                 case X64Encoding_rm: *curr++ = 0x8B; break;
                 case X64Encoding_ri:
-                case X64Encoding_mi: *curr++ = 0xC7; break;
+                case X64Encoding_mi: *curr++ = 0xC7; reg = 0; break;
                 default: assert(0 && "invald operands for MOV"); break;
             }
         } break;
@@ -188,7 +210,7 @@ assemble_x64_instruction_to_machine_code(X64_Builder* x64, X64_Instruction* insn
                 case X64Encoding_mr: *curr++ = 0x01; break;
                 case X64Encoding_rm: *curr++ = 0x03; break;
                 case X64Encoding_ri:
-                case X64Encoding_mi: *curr++ = 0x81; break;
+                case X64Encoding_mi: *curr++ = 0x81; reg = 0; break;
                 default: assert(0 && "invald operands for ADD"); break;
             }
         } break;
@@ -199,7 +221,7 @@ assemble_x64_instruction_to_machine_code(X64_Builder* x64, X64_Instruction* insn
                 case X64Encoding_mr: *curr++ = 0x29; break;
                 case X64Encoding_rm: *curr++ = 0x2B; break;
                 case X64Encoding_ri:
-                case X64Encoding_mi: *curr++ = 0x81; break;
+                case X64Encoding_mi: *curr++ = 0x81; reg = 5; break;
                 default: assert(0 && "invald operands for SUB"); break;
             } break;
         } break;
@@ -207,35 +229,101 @@ assemble_x64_instruction_to_machine_code(X64_Builder* x64, X64_Instruction* insn
         case X64Opcode_imul: {
             switch (insn->encoding) {
                 case X64Encoding_rr: 
-                case X64Encoding_rm: *curr++ = 0x0F; *curr++ = 0xAF; break;
+                case X64Encoding_rm: *curr++ = 0x0F; *curr++ = 0xAF; reg = 5; break;
                 default: assert(0 && "invald operands for IMUL"); break;
             }
         } break;
         
         case X64Opcode_idiv: {
             switch (insn->encoding) {
-                case X64Encoding_r: *curr++ = 0xF7; break;
+                case X64Encoding_m:
+                case X64Encoding_r: *curr++ = 0xF7; reg = 7; break;
                 default: assert(0 && "invald operands for IDIV"); break;
             }
         } break;
     }
     
     // modrm
+    u8 modrm_mod = 0;
+    u8 modrm_reg = reg;
+    u8 modrm_rm = 0;
     
+    if (insn->encoding != X64Encoding_r || 
+        insn->encoding != X64Encoding_rr || 
+        insn->encoding != X64Encoding_ri) {
+        modrm_mod = 0x11; // direct addressing
+    } else {
+        modrm_mod = 0x10; // intdirect addressing
+    }
     
-    if (insn->encoding == X64Encoding_mr ||
-        insn->encoding == X64Encoding_rm ||
-        insn->encoding == X64Encoding_rm) {
-        u8* disp_bytes = (u8*) &insn.displacement;
+    switch (insn->encoding) {
+        case X64Encoding_ri:
+        case X64Encoding_mi:
+        case X64Encoding_r: {
+            modrm_rm = insn->op0.reg_allocated;
+        } break;
+        
+        case X64Encoding_m: {
+            modrm_rm = insn->op0.reg_allocated;
+        } break;
+        
+        case X64Encoding_rr: {
+            modrm_reg = insn->op0.reg_allocated;
+            modrm_rm = insn->op1.reg_allocated;
+        } break;
+        
+        case X64Encoding_rm: {
+            modrm_rm = insn->op0.reg_allocated;
+            modrm_reg = insn->op1.reg_allocated;
+        } break;
+    }
+    
+    *curr++ = (modrm_mod << 6) | (modrm_reg << 3) | modrm_rm;
+    
+    // displacement
+    u8* disp_bytes = 0;
+    if (insn->encoding == X64Encoding_mr || insn->encoding == X64Encoding_mi) {
+        disp_bytes = (u8*) &insn->op0.displacement;
+    } else if (insn->encoding == X64Encoding_rm) {
+        disp_bytes = (u8*) &insn->op1.displacement;
+    }
+    if (disp_bytes) {
         for (s32 byte_index = 0; byte_index < sizeof(s32); byte_index++) {
             // TODO(Alexander): little-endian
-            push_u8(assembler, disp_bytes[byte_index]);
+            *curr++ = disp_bytes[byte_index];
         }
     }
     
-    result.count = (umm) result.data - (umm) result.data;
-    return result;
+    // immediate
+    if (insn->encoding == X64Encoding_ri || 
+        insn->encoding == X64Encoding_mi) {
+        u8* imm_bytes = (u8*) &insn->op0.imm;
+        for (s32 byte_index = 0; byte_index < sizeof(s32); byte_index++) {
+            // TODO(Alexander): little-endian
+            *curr++ = imm_bytes[byte_index];
+        }
+    }
+    
+    code->size = (umm) curr - (umm) code->bytes;
 }
+
+
+Machine_Code
+assemble_to_x64_machine_code(array(X64_Instruction)* instructions) {
+    Machine_Code code = {};
+    code.bytes = (u8*) malloc(1024); // playing a bit unsafe, we can overflow this
+    
+    *code.bytes = 0xCC; // int3 breakpoint
+    code.size++;
+    
+    for_array(instructions, insn, _) {
+        assemble_x64_instruction_to_machine_code(&code, insn);
+    }
+    
+    return code;
+}
+
+
 
 void
 string_builder_push(String_Builder* sb, X64_Operand* operand, bool show_virtual_registers=false) {
@@ -276,6 +364,16 @@ string_builder_push(String_Builder* sb, X64_Operand* operand, bool show_virtual_
 void
 string_builder_push(String_Builder* sb, X64_Instruction* insn, bool show_virtual_registers=false) {
     cstring mnemonic = x64_opcode_name_table[insn->opcode];
+    
+    switch (insn->encoding) {
+        case X64Encoding_r: string_builder_push(sb, "(R)  "); break;
+        case X64Encoding_rr: string_builder_push(sb, "(RR) "); break;
+        case X64Encoding_mr: string_builder_push(sb, "(MR) "); break;
+        case X64Encoding_rm: string_builder_push(sb, "(RM) "); break;
+        case X64Encoding_ri: string_builder_push(sb, "(RI) "); break;
+        case X64Encoding_mi: string_builder_push(sb, "(MI) "); break;
+        default: string_builder_push(sb, "(??) "); break;
+    }
     
     string_builder_push_format(sb, "%", f_cstring(mnemonic));
     if (insn->op0.kind) {

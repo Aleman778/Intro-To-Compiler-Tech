@@ -8,6 +8,11 @@
 #include "bytecode.cpp"
 #include "x64.cpp"
 
+#if BUILD_WINDOWS
+#include <windows.h>
+#endif
+
+
 string
 read_entire_file(cstring filepath) {
     string result = {};
@@ -81,6 +86,8 @@ getline() {
     return linep;
 }
 
+typedef int asm_main(void);
+
 int
 main(int argc, char** argv) {
     
@@ -105,6 +112,35 @@ main(int argc, char** argv) {
         X64_Builder x64_builder = {};
         convert_to_x64(&x64_builder, bc_builder.instructions);
         x64_print_program(&x64_builder);
+        
+        Machine_Code code = assemble_to_x64_machine_code(x64_builder.instructions);
+        pln("\nX64 Machine Code (% bytes):", f_umm(code.size));
+        for (int byte_index = 0; byte_index < code.size; byte_index++) {
+            u8 byte = code.bytes[byte_index];
+            if (byte > 0xF) {
+                printf("%hhX ", byte);
+            } else {
+                printf("0%hhX ", byte);
+            }
+            
+            if (byte_index % 16 == 15) {
+                printf("\n");
+            }
+        }
+        
+        // Run the code JIT
+#if BUILD_WINDOWS
+        u32 asm_buffer_size = code.size + 1024;
+        void* asm_buffer = VirtualAlloc(0, asm_buffer_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        memcpy(asm_buffer, code.bytes, code.size);
+        DWORD prev_protect = 0;
+        VirtualProtect(asm_buffer, asm_buffer_size, PAGE_EXECUTE_READ, &prev_protect);
+        asm_main* func = (asm_main*) asm_buffer;
+        int jit_exit_code = (int) func();
+#endif
+        
+        
+        
         
     } else {
         

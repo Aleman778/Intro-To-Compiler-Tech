@@ -8,11 +8,12 @@ enum Bc_Opcode {
     Bytecode_sub,   // dest = src0 - src1
     Bytecode_mul,   // dest = src0 * src1
     Bytecode_div,   // dest = src0 / src1
+    Bytecode_ret,   // returns src0
     // ... 
 };
 
 const cstring opcode_names[] = {
-    "noop", "push", "load", "store", "add", "sub", "mul"
+    "noop", "push", "load", "store", "add", "sub", "mul", "div", "ret"
 };
 
 enum Bc_Type {
@@ -105,6 +106,15 @@ bc_load(Bc_Builder* bc, Bc_Operand operand) {
 }
 
 void
+bc_ret(Bc_Builder* bc, Bc_Operand operand) {
+    Bc_Instruction insn = {};
+    insn.dest = bc_unique_register(bc, BcType_s32);
+    insn.opcode = Bytecode_ret;
+    insn.src0 = operand;
+    array_push(bc->instructions, insn);
+}
+
+void
 bc_store(Bc_Builder* bc, Bc_Operand dest, Bc_Operand src) {
     Bc_Instruction insn = {};
     insn.opcode = Bytecode_store;
@@ -171,9 +181,14 @@ result = bc_binary(bc, Bytecode_##opcode, lhs, rhs); \
         } break;
         
         case Ast_Block: {
+            Bc_Operand result = {};
             for_array_v(node->Block.exprs, expr, _) {
-                bc_build_expression(bc, expr);
+                result= bc_build_expression(bc, expr);
             }
+            if (result.kind != BcOperand_None) {
+                bc_ret(bc, result);
+            }
+            
         } break;
     }
     
