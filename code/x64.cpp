@@ -44,7 +44,7 @@ enum X64_Register {
 };
 
 const cstring x64_register_name_table[] = {
-    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"
+    "eax", "ecx", "edx", "ebx", "rsp", "rbp", "esi", "edi"
 };
 
 struct X64_Operand {
@@ -86,7 +86,7 @@ x64_build_operand(X64_Builder* x64, Bc_Operand operand) {
             if (operand.type == BcType_s32_ptr) {
                 result.kind = X64Operand_m32;
                 result.reg = 0;
-                result.reg_allocated = X64Register_rsp;
+                result.reg_allocated = X64Register_rbp;
                 result.displacement = map_get(x64->stack_offsets, operand.Register);
                 result.is_allocated = true;
             } else {
@@ -121,8 +121,8 @@ void
 convert_to_x64_instruction(X64_Builder* x64, Bc_Instruction* bc) {
     switch (bc->opcode) {
         case Bytecode_push: { // dest = push src0
-            map_put(x64->stack_offsets, bc->dest.Register, x64->stack_pointer);
             x64->stack_pointer -= bc->src0.Signed_Int;
+            map_put(x64->stack_offsets, bc->dest.Register, x64->stack_pointer);
         } break;
         
         case Bytecode_store: { // *src0 = src1 -> mov [src0], src1
@@ -169,8 +169,56 @@ convert_to_x64_instruction(X64_Builder* x64, Bc_Instruction* bc) {
 
 void
 convert_to_x64(X64_Builder* x64, array(Bc_Instruction)* instructions) {
+    // simple prologue, mov rbp, rsp (windows doesn't use rbp)
+    X64_Operand rbp = {};
+    rbp.kind = X64Operand_r32;
+    rbp.reg_allocated = X64Register_rbp;
+    rbp.is_allocated = true;
+    
+    X64_Operand rsp = {};
+    rsp.kind = X64Operand_r32;
+    rsp.reg_allocated = X64Register_rsp;
+    rsp.is_allocated = true;
+    
+    X64_Instruction mov_insn = {};
+    mov_insn.opcode = X64Opcode_mov;
+    mov_insn.op0 = rbp;
+    mov_insn.op1 = rsp;
+    x64_push_instruction(x64, mov_insn);
+    
     for_array(instructions, insn, _) {
         convert_to_x64_instruction(x64, insn);
+    }
+}
+
+
+void
+allocate_x64_registers(array(X64_Instruction)* instructions) {
+    X64_Register free_regs[] = {
+        X64Register_rdi, X64Register_rsi, X64Register_rbx, 
+        X64Register_rdx, X64Register_rcx, X64Register_rax
+    };
+    int free_count = fixed_array_count(free_regs);
+    map(u32, X64_Register)* allocated_regs = 0;
+    
+    for (int i = 0; i < array_count(instructions); i++) {
+        X64_Instruction* curr = instructions + i;
+        
+        if (curr->op0.kind == X64Operand_r32 && !curr->op0.is_allocated) {
+            // Allocate
+            assert(free_count > 0 && "ran out of registers");
+            curr->op0.reg_allocated = free_regs[--free_count];
+            curr->op0.is_allocated = true;
+            map_put(allocated_regs, curr->op0.reg, curr->op0.reg_allocated);
+        }
+        
+        if (curr->op1.kind == X64Operand_r32 && !curr->op1.is_allocated) {
+            // Free after use
+            assert(free_count < fixed_array_count(free_reg));
+            curr->op1.reg_allocated = map_get(allocated_regs, curr->op1.reg);
+            curr->op1.is_allocated = true;
+            free_regs[free_count++] = curr->op1.reg_allocated;
+        }
     }
 }
 
@@ -190,13 +238,18 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
         return;
     }
     
+    // REX
+    if (insn->op1.reg_allocated == X64Register_rsp) {
+        *curr++ = 0b01001000;
+    }
+    
     // opcode
     u8 reg = 0;
     switch (insn->opcode) {
         case X64Opcode_mov: {
             switch (insn->encoding) {
-                case X64Encoding_rr:
                 case X64Encoding_mr: *curr++ = 0x89; break;
+                case X64Encoding_rr:
                 case X64Encoding_rm: *curr++ = 0x8B; break;
                 case X64Encoding_ri:
                 case X64Encoding_mi: *curr++ = 0xC7; reg = 0; break;
@@ -206,8 +259,8 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
         
         case X64Opcode_add: {
             switch (insn->encoding) {
-                case X64Encoding_rr:
                 case X64Encoding_mr: *curr++ = 0x01; break;
+                case X64Encoding_rr:
                 case X64Encoding_rm: *curr++ = 0x03; break;
                 case X64Encoding_ri:
                 case X64Encoding_mi: *curr++ = 0x81; reg = 0; break;
@@ -217,8 +270,8 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
         
         case X64Opcode_sub: {
             switch (insn->encoding) {
-                case X64Encoding_rr:
                 case X64Encoding_mr: *curr++ = 0x29; break;
+                case X64Encoding_rr:
                 case X64Encoding_rm: *curr++ = 0x2B; break;
                 case X64Encoding_ri:
                 case X64Encoding_mi: *curr++ = 0x81; reg = 5; break;
@@ -248,12 +301,12 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
     u8 modrm_reg = reg;
     u8 modrm_rm = 0;
     
-    if (insn->encoding != X64Encoding_r || 
-        insn->encoding != X64Encoding_rr || 
-        insn->encoding != X64Encoding_ri) {
-        modrm_mod = 0x11; // direct addressing
+    if (insn->encoding == X64Encoding_r || 
+        insn->encoding == X64Encoding_rr || 
+        insn->encoding == X64Encoding_ri) {
+        modrm_mod = 0b11; // direct addressing
     } else {
-        modrm_mod = 0x10; // intdirect addressing
+        modrm_mod = 0b10; // indirect addressing
     }
     
     switch (insn->encoding) {
@@ -267,14 +320,15 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
             modrm_rm = insn->op0.reg_allocated;
         } break;
         
-        case X64Encoding_rr: {
-            modrm_reg = insn->op0.reg_allocated;
-            modrm_rm = insn->op1.reg_allocated;
-        } break;
-        
-        case X64Encoding_rm: {
+        case X64Encoding_mr: {
             modrm_rm = insn->op0.reg_allocated;
             modrm_reg = insn->op1.reg_allocated;
+        } break;
+        
+        case X64Encoding_rr:
+        case X64Encoding_rm: {
+            modrm_reg = insn->op0.reg_allocated;
+            modrm_rm = insn->op1.reg_allocated;
         } break;
     }
     
@@ -297,7 +351,7 @@ assemble_x64_instruction_to_machine_code(Machine_Code* code, X64_Instruction* in
     // immediate
     if (insn->encoding == X64Encoding_ri || 
         insn->encoding == X64Encoding_mi) {
-        u8* imm_bytes = (u8*) &insn->op0.imm;
+        u8* imm_bytes = (u8*) &insn->op1.imm;
         for (s32 byte_index = 0; byte_index < sizeof(s32); byte_index++) {
             // TODO(Alexander): little-endian
             *curr++ = imm_bytes[byte_index];
@@ -313,8 +367,9 @@ assemble_to_x64_machine_code(array(X64_Instruction)* instructions) {
     Machine_Code code = {};
     code.bytes = (u8*) malloc(1024); // playing a bit unsafe, we can overflow this
     
-    *code.bytes = 0xCC; // int3 breakpoint
-    code.size++;
+    // int3 breakpoint
+    //*code.bytes = 0xCC;
+    //code.size++;
     
     for_array(instructions, insn, _) {
         assemble_x64_instruction_to_machine_code(&code, insn);

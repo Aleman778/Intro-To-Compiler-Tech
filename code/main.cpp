@@ -52,40 +52,6 @@ parse_source(string source) {
     return ast;
 }
 
-char*
-getline() {
-    // From https://stackoverflow.com/questions/314401/how-to-read-a-line-from-the-console-in-c
-    char* line = (char*) malloc(100), * linep = line;
-    size_t lenmax = 100, len = lenmax;
-    int c;
-    
-    if(line == NULL)
-        return NULL;
-    
-    for(;;) {
-        c = fgetc(stdin);
-        if(c == EOF)
-            break;
-        
-        if(--len == 0) {
-            len = lenmax;
-            char* linen = (char*) realloc(linep, lenmax *= 2);
-            
-            if(linen == NULL) {
-                free(linep);
-                return NULL;
-            }
-            line = linen + (line - linep);
-            linep = linen;
-        }
-        
-        if((*line++ = c) == '\n')
-            break;
-    }
-    *line = '\0';
-    return linep;
-}
-
 typedef int asm_main(void);
 
 int
@@ -101,7 +67,6 @@ main(int argc, char** argv) {
         array_push(interp.scopes, scope);
         
         Value interp_result = interp_expression(&interp, ast);
-        pln("Interpreter exited with %\n", f_int(interp_result.integer));
         
         // Bytecode builder
         Bc_Builder bc_builder = {};
@@ -111,6 +76,13 @@ main(int argc, char** argv) {
         // X64 assembler
         X64_Builder x64_builder = {};
         convert_to_x64(&x64_builder, bc_builder.instructions);
+        
+        pln("Before register allocation:");
+        x64_print_program(&x64_builder);
+        
+        allocate_x64_registers(x64_builder.instructions);
+        
+        pln("After register allocation:");
         x64_print_program(&x64_builder);
         
         Machine_Code code = assemble_to_x64_machine_code(x64_builder.instructions);
@@ -129,18 +101,21 @@ main(int argc, char** argv) {
         }
         
         // Run the code JIT
+        asm_main* func = 0;
 #if BUILD_WINDOWS
         u32 asm_buffer_size = code.size + 1024;
         void* asm_buffer = VirtualAlloc(0, asm_buffer_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         memcpy(asm_buffer, code.bytes, code.size);
         DWORD prev_protect = 0;
         VirtualProtect(asm_buffer, asm_buffer_size, PAGE_EXECUTE_READ, &prev_protect);
-        asm_main* func = (asm_main*) asm_buffer;
-        int jit_exit_code = (int) func();
+        func = (asm_main*) asm_buffer;
 #endif
         
-        
-        
+        pln("\n\nInterpreter exited with code %", f_int(interp_result.integer));
+        if (func) {
+            int jit_exit_code = (int) func();
+            pln("        JIT exited with code %", f_int(jit_exit_code));
+        }
         
     } else {
         
