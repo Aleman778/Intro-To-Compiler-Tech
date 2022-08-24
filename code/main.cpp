@@ -8,8 +8,11 @@
 #include "bytecode.cpp"
 #include "x64.cpp"
 
-#if BUILD_WINDOWS
+#if defined(BUILD_WINDOWS)
 #include <windows.h>
+#elif defined(BUILD_POSIX)
+#include <sys/mman.h>
+#include 
 #endif
 
 
@@ -17,8 +20,7 @@ string
 read_entire_file(cstring filepath) {
     string result = {};
     
-    FILE* file;
-    fopen_s(&file, filepath, "rb");
+    FILE* file = fopen(filepath, "rb");
     if (!file) {
         pln("File `%` was not found!", f_cstring(filepath));
         return result;
@@ -73,6 +75,9 @@ main(int argc, char** argv) {
         bc_build_expression(&bc_builder, ast);
         bc_print_program(&bc_builder);
         
+        asm_main* func = 0;
+        
+#if defined(BUILD_X64)
         // X64 assembler
         X64_Builder x64_builder = {};
         convert_to_x64(&x64_builder, bc_builder.instructions);
@@ -101,15 +106,31 @@ main(int argc, char** argv) {
         }
         
         // Run the code JIT
-        asm_main* func = 0;
-#if BUILD_WINDOWS
+#if defined(BUILD_WINDOWS)
         u32 asm_buffer_size = code.size + 1024;
         void* asm_buffer = VirtualAlloc(0, asm_buffer_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         memcpy(asm_buffer, code.bytes, code.size);
         DWORD prev_protect = 0;
         VirtualProtect(asm_buffer, asm_buffer_size, PAGE_EXECUTE_READ, &prev_protect);
         func = (asm_main*) asm_buffer;
+        
+#elif defined(BUILD_POSIX)
+        u32 asm_buffer_size = code.size + 1024;
+        
+        void* asm_buffer = 0;
+        posix_memalign(&asm_buffer, 4096, asm_buffer_size);
+        mprotect(asm_buffer, size, PROT_READ | PROT_WRITE);
+        memset(asm_buffer, 0, asm_buffer_size);
+        memcpy(asm_buffer, code.bytes, code.size);
+        mprotect(asm_buffer, size, PROT_READ | PROT_EXEC);
+        func = (asm_main*) asm_buffer;
 #endif
+        
+        if (!func) {
+            pln("Failed to run X64 JIT, BUILD_WINDOWS or BUILD_POSIX needs to be defined");
+        }
+        
+#endif // #ifdef BUILD_X64
         
         pln("\n\nInterpreter exited with code %", f_int(interp_result.integer));
         if (func) {

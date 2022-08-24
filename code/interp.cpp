@@ -33,6 +33,10 @@ interp_expression(Interp* interp, Ast* ast) {
         
         case Ast_Ident: {
             result = interp_load_value(interp, ast->Ident);
+            if (result.type == Value_void) {
+                result.integer = 0;
+                result.type = Value_integer;
+            }
         } break;
         
         case Ast_Binary: {

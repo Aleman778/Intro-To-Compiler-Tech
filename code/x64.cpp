@@ -205,11 +205,18 @@ allocate_x64_registers(array(X64_Instruction)* instructions) {
         X64_Instruction* curr = instructions + i;
         
         if (curr->op0.kind == X64Operand_r32 && !curr->op0.is_allocated) {
-            // Allocate
-            assert(free_count > 0 && "ran out of registers");
-            curr->op0.reg_allocated = free_regs[--free_count];
-            curr->op0.is_allocated = true;
-            map_put(allocated_regs, curr->op0.reg, curr->op0.reg_allocated);
+            smm index = map_get_index(allocated_regs, curr->op0.reg);
+            if (index != -1) {
+                // Used in destination, it's fine just allow it
+                curr->op0.reg_allocated = allocated_regs[index].value;
+                curr->op0.is_allocated = true;
+            } else {
+                // Allocate
+                assert(free_count > 0 && "ran out of registers");
+                curr->op0.reg_allocated = free_regs[--free_count];
+                curr->op0.is_allocated = true;
+                map_put(allocated_regs, curr->op0.reg, curr->op0.reg_allocated);
+            }
         }
         
         if (curr->op1.kind == X64Operand_r32 && !curr->op1.is_allocated) {
