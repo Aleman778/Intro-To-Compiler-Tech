@@ -1,2 +1,3 @@
 # Tech Talk: Introduction to Compiler Technology
-Introduction to compiler tech is my first ever tech talk
+Here is the complete source code for my example compiler that
+I presented in my first tech talk "Introduction to compiler Technology"
